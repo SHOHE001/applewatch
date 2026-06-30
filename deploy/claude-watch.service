@@ -1,0 +1,29 @@
+[Unit]
+Description=claude-watch (Apple Watch から Claude Code とやりとりするための Slack bot + Webhook)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shohei
+Group=shohei
+# 日本語パスに注意。systemd は UTF-8 を解釈するが、% などのエスケープは予約されているので避ける。
+WorkingDirectory=/home/shohei/プロジェクト/applewatch
+EnvironmentFile=/home/shohei/プロジェクト/applewatch/.env
+ExecStart=/home/shohei/プロジェクト/applewatch/.venv/bin/python -m claude_watch.server
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claude-watch
+
+# セキュリティ強化（任意）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+# WorkingDirectory が /home/shohei なので ProtectHome=read-only にすると ExecStart が読めなくなるケースあり。
+# 動かなければ ProtectHome の行をコメントアウトする。
+
+[Install]
+WantedBy=multi-user.target
