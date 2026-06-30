@@ -1,0 +1,40 @@
+{
+  "namespace": "gloop",
+  "repo_name": "applewatch",
+  "roadmap_path": "ROADMAP.md",
+  "milestone_prefix": "Phase ",
+  "branch_prefix": "gloop/",
+  "default_branch": "main",
+  "format_commands": [],
+  "guard_paths": {
+    "deny_orchestrator_write": ["src/**", "lib/**"],
+    "allow_orchestrator_write": ["tests/**", "test/**", "docs/**", "features/**", "README.md", "CHANGELOG.md", "ROADMAP.md", ".claude/**"]
+  },
+  "stop_conditions": {
+    "max_failure_streak": 3,
+    "max_cumulative_tokens": 100000000,
+    "max_daily_tokens": 5000000,
+    "max_per_issue_tokens": 200000,
+    "max_design_loops": {
+      "light": 3,
+      "standard": 5,
+      "heavy": 10
+    },
+    "max_codex_loops": 5
+  },
+  "loop_intervals": {
+    "watcher_poll_seconds": 10,
+    "lock_retry_seconds": 30,
+    "lock_ttl_hours": 12,
+    "worker_freeze_timeout_minutes": 45
+  },
+  "notify": {
+    "discord_webhook_env": "DISCORD_WEBHOOK_URL",
+    "claude_watch_endpoint": null
+  },
+  "checker": {
+    "command": "codex",
+    "personas": ["architect", "contrarian", "migration"],
+    "default_mode": "refute"
+  }
+}

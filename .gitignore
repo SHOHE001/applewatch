@@ -1,0 +1,5 @@
+
+# gloop
+features/.loop/last-cycle-marker
+features/.loop/*.pid
+features/.batch/lock
