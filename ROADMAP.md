@@ -5,10 +5,10 @@
 - Phase Milestone: `Phase 1`
 - Goal: 基礎機能の実装
 
-## Phase 2: <fill in>
+## Phase 2: interaction
 
 - Phase Milestone: `Phase 2`
-- Goal: <fill in>
+- Goal: Phase 1 で作った Slack bot を土台に、既存セッション介入・選択肢/プラン承認・push 通知を実現する
 
 ---
 

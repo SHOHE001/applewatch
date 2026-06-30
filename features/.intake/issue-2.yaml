@@ -1,0 +1,5 @@
+issue: 2
+stages:
+- stage: created
+  at: 2026-06-30T15:59:53.891Z
+  data: {"labels":"type:feature,batch:feature,gate:human-feel","phase":"2","milestone":"Phase 2","title":"Apple Watch 連携の拡張: 既存セッション介入 / 選択肢回答 / push 通知"}

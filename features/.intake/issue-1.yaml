@@ -1,0 +1,5 @@
+issue: 1
+stages:
+- stage: created
+  at: 2026-06-30T15:59:53.824Z
+  data: {"labels":"type:feature,batch:feature,gate:human-feel","phase":"1","milestone":"Phase 1","title":"Slack bot で Apple Watch から単発質問を受ける MVP"}
