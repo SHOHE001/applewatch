@@ -1,6 +1,8 @@
 {
   "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "BASH_MAX_TIMEOUT_MS": "7500000",
+    "BASH_DEFAULT_TIMEOUT_MS": "600000"
   },
   "hooks": {
     "PreToolUse": [
@@ -34,6 +36,31 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/skills/gloop/scripts/loop-hook-start.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(node $HOME/.claude/skills/gloop/scripts/*)",
+      "Bash(node $HOME/.claude/skills/gloop-work/scripts/*)",
+      "Bash(node $HOME/.claude/skills/gloop-intake/scripts/*)",
+      "Bash(gh issue *)",
+      "Bash(gh pr create*)",
+      "Bash(gh pr view*)",
+      "Bash(gh pr list*)",
+      "Bash(gh label *)",
+      "Bash(gh api repos/*/milestones*)",
+      "Bash(git push -u origin gloop/*)"
     ]
   }
 }
