@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-watch"
+version = "0.1.0"
+description = "Apple Watch から Claude Code とやりとりするための Discord bot + Webhook"
+requires-python = ">=3.11"
+dependencies = [
+    "discord.py>=2.4",
+    "aiohttp>=3.9",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+claude-watch = "claude_watch.server:main_sync"
+
+[tool.setuptools.packages.find]
+include = ["claude_watch*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]

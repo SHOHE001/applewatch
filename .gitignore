@@ -3,3 +3,15 @@
 features/.loop/last-cycle-marker
 features/.loop/*.pid
 features/.batch/lock
+
+# python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# env
+.env
+.env.local
