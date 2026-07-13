@@ -5,9 +5,8 @@ import signal
 
 import uvicorn
 from dotenv import load_dotenv
-from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 
-from .bot import build_app
+from .bot import build_client
 from .webhook import app as webhook_app
 
 
@@ -24,8 +23,11 @@ async def main() -> None:
     _configure_logging()
     logger = logging.getLogger("claude_watch.server")
 
-    slack_app = build_app()
-    handler = AsyncSocketModeHandler(slack_app, os.environ.get("SLACK_APP_TOKEN", ""))
+    token = os.environ.get("DISCORD_BOT_TOKEN", "")
+    if not token:
+        raise SystemExit("DISCORD_BOT_TOKEN is not set")
+
+    client = build_client()
 
     port = int(os.environ.get("WEBHOOK_PORT", "8787"))
     config = uvicorn.Config(
@@ -36,9 +38,9 @@ async def main() -> None:
     )
     server = uvicorn.Server(config)
 
-    logger.info("starting claude-watch (slack socket mode + webhook on :%d)", port)
+    logger.info("starting claude-watch (discord + webhook on :%d)", port)
     tasks = [
-        asyncio.create_task(handler.start_async(), name="slack-socket"),
+        asyncio.create_task(client.start(token), name="discord-client"),
         asyncio.create_task(server.serve(), name="webhook"),
     ]
 
@@ -56,6 +58,10 @@ async def main() -> None:
         [*tasks, asyncio.create_task(stop.wait(), name="stop-signal")],
         return_when=asyncio.FIRST_COMPLETED,
     )
+
+    server.should_exit = True
+    if not client.is_closed():
+        await client.close()
     for task in pending:
         task.cancel()
     for task in done:
@@ -64,7 +70,6 @@ async def main() -> None:
         exc = task.exception()
         if exc is not None:
             logger.exception("task %s failed", task.get_name(), exc_info=exc)
-    server.should_exit = True
     logger.info("claude-watch stopped")
 
 

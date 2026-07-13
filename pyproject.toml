@@ -5,10 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "claude-watch"
 version = "0.1.0"
-description = "Apple Watch から Claude Code とやりとりするための Slack bot + Webhook"
+description = "Apple Watch から Claude Code とやりとりするための Discord bot + Webhook"
 requires-python = ">=3.11"
 dependencies = [
-    "slack-bolt>=1.21",
+    "discord.py>=2.4",
     "aiohttp>=3.9",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",

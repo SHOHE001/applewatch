@@ -1,57 +1,81 @@
 import logging
 import os
-import re
+from typing import Awaitable, Callable
 
-from slack_bolt.app.async_app import AsyncApp
+import discord
 
 from .claude_runner import run_claude
 
 
 logger = logging.getLogger(__name__)
 
-_MENTION_RE = re.compile(r"^<@[A-Z0-9]+>\s*")
+CHUNK_SIZE = 1900
 
 
-def _strip_mention(text: str) -> str:
-    return _MENTION_RE.sub("", text or "").strip()
+def _split_message(text: str, limit: int = CHUNK_SIZE) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    remaining = text
+    while remaining:
+        chunks.append(remaining[:limit])
+        remaining = remaining[limit:]
+    return chunks
 
 
-def build_app() -> AsyncApp:
-    app = AsyncApp(token=os.environ.get("SLACK_BOT_TOKEN", ""))
-
-    @app.event("app_mention")
-    async def handle_mention(event, say, logger):
-        prompt = _strip_mention(event.get("text", ""))
-        thread_ts = event.get("thread_ts") or event.get("ts")
-        if not prompt:
-            await say(text="使い方: @bot <質問>", thread_ts=thread_ts)
-            return
-        await _respond(prompt, say, thread_ts, logger)
-
-    @app.event("message")
-    async def handle_message(event, say, logger):
-        if event.get("channel_type") != "im":
-            return
-        if event.get("bot_id") or event.get("subtype"):
-            return
-        prompt = (event.get("text") or "").strip()
-        thread_ts = event.get("thread_ts") or event.get("ts")
-        if not prompt:
-            return
-        await _respond(prompt, say, thread_ts, logger)
-
-    return app
+Runner = Callable[..., Awaitable[tuple[int, str, str]]]
 
 
-async def _respond(prompt: str, say, thread_ts: str | None, logger) -> None:
-    logger.info("claude prompt: %s", prompt[:200])
-    rc, stdout, stderr = await run_claude(prompt)
-    if rc != 0:
-        body = stderr.strip() or "(no stderr)"
-        await say(
-            text=f"claude が失敗しました (rc={rc}):\n```\n{body[:1500]}\n```",
-            thread_ts=thread_ts,
+class ClaudeWatchClient(discord.Client):
+    def __init__(
+        self,
+        *,
+        target_channel_id: int,
+        runner: Runner | None = None,
+    ) -> None:
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(intents=intents)
+        self._target_channel_id = target_channel_id
+        self._runner: Runner = runner or run_claude
+
+    async def on_ready(self) -> None:
+        logger.info(
+            "discord bot logged in as %s (target channel=%s)",
+            self.user,
+            self._target_channel_id,
         )
-        return
-    answer = stdout.strip() or "(空のレスポンス)"
-    await say(text=answer[:3000], thread_ts=thread_ts)
+
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot:
+            return
+        if message.channel.id != self._target_channel_id:
+            return
+        prompt = (message.content or "").strip()
+        if not prompt:
+            return
+        await self._respond(message, prompt)
+
+    async def _respond(self, message: discord.Message, prompt: str) -> None:
+        logger.info("claude prompt: %s", prompt[:200])
+        rc, stdout, stderr = await self._runner(prompt)
+        if rc != 0:
+            body = (stderr.strip() or "(no stderr)")[:1500]
+            await message.reply(
+                f"claude が失敗しました (rc={rc}):\n```\n{body}\n```"
+            )
+            return
+        answer = stdout.strip() or "(空のレスポンス)"
+        chunks = _split_message(answer)
+        first = True
+        for chunk in chunks:
+            if first:
+                await message.reply(chunk)
+                first = False
+            else:
+                await message.channel.send(chunk)
+
+
+def build_client() -> ClaudeWatchClient:
+    channel_id = int(os.environ.get("DISCORD_CHANNEL_ID", "0"))
+    return ClaudeWatchClient(target_channel_id=channel_id)

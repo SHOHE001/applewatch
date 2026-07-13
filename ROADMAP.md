@@ -8,7 +8,7 @@
 ## Phase 2: interaction
 
 - Phase Milestone: `Phase 2`
-- Goal: Phase 1 で作った Slack bot を土台に、既存セッション介入・選択肢/プラン承認・push 通知を実現する
+- Goal: Phase 1 で作った Discord bot を土台に、既存セッション介入・選択肢/プラン承認・push 通知を実現する
 
 ---
 

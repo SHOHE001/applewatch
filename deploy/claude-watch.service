@@ -1,5 +1,5 @@
 [Unit]
-Description=claude-watch (Apple Watch から Claude Code とやりとりするための Slack bot + Webhook)
+Description=claude-watch (Apple Watch から Claude Code とやりとりするための Discord bot + Webhook)
 After=network-online.target
 Wants=network-online.target
 
