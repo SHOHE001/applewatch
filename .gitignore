@@ -15,3 +15,5 @@ __pycache__/
 # env
 .env
 .env.local
+features/.loop/
+features/.batch/
