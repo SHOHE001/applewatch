@@ -12,6 +12,7 @@ app = FastAPI(title="claude-watch webhook")
 class AskRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=8000)
     timeout: int | None = Field(default=None, ge=1, le=600)
+    session_id: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 @app.get("/health")
@@ -27,7 +28,12 @@ async def ask(req: AskRequest, authorization: str | None = Header(default=None))
     if authorization != f"Bearer {token}":
         raise HTTPException(status_code=401, detail="unauthorized")
 
-    rc, stdout, stderr = await run_claude(req.prompt, timeout=req.timeout)
+    if req.session_id:
+        rc, stdout, stderr = await run_claude(
+            req.prompt, timeout=req.timeout, mode="resume", session_id=req.session_id
+        )
+    else:
+        rc, stdout, stderr = await run_claude(req.prompt, timeout=req.timeout)
     if rc != 0:
         raise HTTPException(status_code=502, detail=f"claude exited rc={rc}: {stderr[:500]}")
     return {"answer": stdout.strip()}
