@@ -1,6 +1,6 @@
 # ROADMAP
 
-## Phase 1: foundation 🚧
+## Phase 1: foundation ✅
 
 - Phase Milestone: `Phase 1`
 - Goal: 基礎機能の実装
