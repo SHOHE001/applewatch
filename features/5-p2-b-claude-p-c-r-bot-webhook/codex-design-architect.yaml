@@ -1,0 +1,34 @@
+verdict: pass
+blocking: 0
+persona: architect
+summary: |
+  critical/high に相当する設計破綻は見つかりません。主な懸念は、既存 bot 設定との意味論的な互換性と、設定責務の置き場所がやや曖昧な点です。
+findings:
+  - severity: medium
+    title: "env 後方互換が設定形式の互換に留まり、bot の動作互換とは一致していない"
+    detail: |
+      `DISCORD_CHANNEL_ID` fallback は既存設定を読める一方で、bot 経路の実行モードは従来の `new` ではなく `continue` へ変わる設計です。Out-of-Scope で「毎回新セッション動作を bot 側に残すこと」を除外しているため high にはしませんが、plan 内の「後方互換」という表現は既存 env 利用者に対して挙動互換まで保証するように読めます。architect 観点では、設定互換と実行意味論の変更が同じ節に混在しています。
+    suggestion: |
+      README と設計方針で「env fallback は設定移行の互換であり、bot の既定動作は Phase 2 から continue に変わる」と明記する。
+    file: "plan.md"
+  - severity: medium
+    title: "channel_map の設定責務が bot.py に閉じており、設定境界が曖昧"
+    detail: |
+      `load_channel_map()` を `bot.py` に追加する設計ですが、TOML config、env fallback、cwd 解決はアプリ全体の設定境界に近い責務です。現時点で webhook は cwd/mode を受け付けないため破綻ではありませんが、`bot.py` が設定パース・後方互換・Discord クライアント構築をすべて持つ形になり、既存システムの境界が太ります。
+    suggestion: |
+      既存に config モジュールがあるならそちらへ寄せる。無い場合も、少なくとも `load_channel_map` を純粋関数化し、`bot.py` の Discord 依存コードと TOML/env パースの依存方向を分離する方針を明記する。
+    file: "plan.md"
+  - severity: medium
+    title: "debug mode が _build_argv の検証経路を迂回する設計になっている"
+    detail: |
+      after スニペットでは `CLAUDE_WATCH_DEBUG=1` の場合に `_build_argv()` より前で return するため、`mode='resume'` かつ `session_id=None` や未知 mode の `ValueError` が debug 時だけ発火しません。設計方針では呼び出し側バグを早期に弾くと書いているため、debug mode が実行意味論を変えてしまいます。
+    suggestion: |
+      debug mode でも先に `_build_argv(prompt, mode, session_id)` を呼んで検証し、その後に subprocess を省略して debug 応答を返す。
+    file: "plan.md"
+  - severity: low
+    title: "cwd の存在・ディレクトリ性検証の扱いが未定義"
+    detail: |
+      TOML の `dir` をそのまま subprocess `cwd` に渡す設計ですが、存在しないパス、ファイルパス、権限不足の扱いが明示されていません。Claude CLI の session_id 実在検証は委譲すると明記されていますが、cwd は Python subprocess の起動前エラーになるため、CLI rc 経路とは別の失敗になります。
+    suggestion: |
+      事前検証しない方針なら、`FileNotFoundError` / `PermissionError` が既存の bot reply 経路に乗ることをテストまたは設計に追記する。
+    file: "plan.md"

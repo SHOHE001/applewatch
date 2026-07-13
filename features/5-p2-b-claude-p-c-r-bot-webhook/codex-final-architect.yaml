@@ -1,0 +1,29 @@
+verdict: pass
+blocking: 0
+persona: architect
+summary: |
+  critical/high に相当するアーキテクチャ破綻は見当たりません。plan の主要境界（bot は channel_map 経由 continue、webhook は session_id resume のみ、未登録 channel は silent ignore）には概ね沿っています。
+findings:
+  - severity: medium
+    title: "Runner 型エイリアスが新しい呼び出し契約とズレている"
+    detail: |
+      `ClaudeWatchClient` は runner を `prompt, mode="continue", cwd=project_dir` で呼ぶようになった一方、既存の `Runner` 型が `Callable[[str], Awaitable[...]]` のままだと、依存注入の契約がコード上で表現されません。テストは `**kwargs` で回避していますが、型利用者や将来のリファクタ時に prompt-only runner を注入して実行時 TypeError になる余地があります。
+    suggestion: |
+      `Protocol` などで `async __call__(self, prompt: str, *, mode: str = ..., cwd: str | None = ..., session_id: str | None = ..., timeout: int | None = ...)` 相当の契約を明示するか、bot 用 runner 型を少なくとも `Callable[..., Awaitable[tuple[int, str, str]]]` に更新してください。
+    file: "claude_watch/bot.py"
+  - severity: medium
+    title: "TOML ローダのスキーマ検証が必須フィールド以外に弱い"
+    detail: |
+      `_parse_toml_channel_map` は `projects` が配列であること、各 entry が table であること、`dir` が文字列であることを明示検証していません。誤った TOML では `AttributeError` や subprocess 側の型エラーに流れ、plan の fail-fast 方針に対してエラーメッセージが不安定になります。
+    suggestion: |
+      `projects = data.get("projects", [])` が list であること、entry が dict であること、`channel_id` が int 変換可能で `dir` が non-empty str であることを `ValueError` に正規化してください。
+    file: "claude_watch/bot.py"
+    line: 82
+  - severity: low
+    title: "README のファイルツリーが実体とズレる可能性がある"
+    detail: |
+      README に `tests/test_p2b_session.py` と `claude-watch.toml.example` を追加していますが、レビュー対象 diff では新規ファイルとして別掲されており、tracked diff だけを見ると追加状態が確認できません。最終コミットでこれらが漏れると README が存在しないファイルを案内します。
+    suggestion: |
+      squash 前に `git status --short` で新規ファイルが add 対象に含まれていることを確認してください。
+    file: "README.md"
+    line: 46

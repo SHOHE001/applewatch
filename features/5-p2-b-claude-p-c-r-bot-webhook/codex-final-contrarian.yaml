@@ -1,0 +1,22 @@
+verdict: pass
+blocking: 0
+persona: contrarian
+summary: |
+  critical/high としてブロックすべき実害は見つかりません。実装は plan の主要経路を満たしていますが、設定ファイルの型異常に対する fail-fast が粗く、debug 出力も plan より情報量が少ないため、運用時の診断性には改善余地があります。
+findings:
+  - severity: medium
+    title: "TOML スキーマ異常が明示的な ValueError にならないケースが残っている"
+    detail: |
+      `_parse_toml_channel_map` は `projects` が配列であること、各 entry が table/dict であること、`dir` が文字列であることを検証していません。例えば `projects = "x"` や `dir = 123` のような TOML は、ロード時に AttributeError/TypeError になったり、後段の subprocess `cwd` で型エラーとして露出します。plan は欠落/重複のみを明示していますが、routing 根幹の fail-fast という方針に対して型エラーの出方が不親切です。
+    suggestion: |
+      `projects = data.get("projects", [])` が list であること、entry が dict であること、`channel_id` が int 化可能であること、`dir` が非空 str であることを `ValueError` に正規化し、テストを追加してください。
+    file: "claude_watch/bot.py"
+    line: 84
+  - severity: low
+    title: "debug 応答が構築済み argv を反映していない"
+    detail: |
+      plan には debug 応答が構築済み argv / mode / cwd を反映するとありますが、現在の debug 文字列は `mode` と `cwd` と prompt のみで、実際に `-c` / `-r <session_id>` がどう組まれたかは返しません。テストも argv ではなく `mode=continue` と `cwd=/x` のみを見ているため、debug 経由の診断能力が plan より弱いです。
+    suggestion: |
+      debug 出力に `argv` の安全な表現を含めるか、plan 側の期待を `mode/cwd/prompt` に下げてください。
+    file: "claude_watch/claude_runner.py"
+    line: 51

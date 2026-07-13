@@ -1,0 +1,22 @@
+verdict: fail
+blocking: 1
+persona: migration
+summary: |
+  実装は主要経路を概ねカバーしていますが、設定ファイルが空またはスキーマ不一致のときに既存の env fallback が完全に無効化されるため、移行時に bot が沈黙します。CI は正常系 TOML と env fallback のみで、この互換性破壊を検出できていません。
+findings:
+  - severity: high
+    title: "存在するが空/無効な TOML が env fallback を潰して bot が無反応になる"
+    detail: |
+      load_channel_map() は CLAUDE_WATCH_CONFIG のファイルが存在するだけで TOML を優先し、projects が無い場合は空 map を返します。既存ユーザーが .env.example 由来で CLAUDE_WATCH_CONFIG=claude-watch.toml を持ち、空ファイルや [projects] など誤った雛形を置いた状態では、DISCORD_CHANNEL_ID / DISCORD_CHANNEL_DIR が設定されていても fallback されず、bot は全チャンネルを silent ignore します。Phase 2 の後方互換方針は「config 無なら env fallback」ですが、移行時には“存在するが未設定”のファイルが最も起きやすく、起動時 fail-fast も warning も無いため既存運用を壊します。
+    suggestion: |
+      TOML が存在する場合でも projects 欠落・空配列・型不一致は ValueError で fail-fast してください。少なくとも空 map を正常扱いせず、env fallback しない理由を起動時に明確化するテストを追加してください。
+    file: "claude_watch/bot.py"
+    line: 88
+  - severity: medium
+    title: "TOML の型検証が不足しており不正値が実行時例外まで遅延する"
+    detail: |
+      _parse_toml_channel_map() は channel_id を int() するだけで、dir が文字列かを検証していません。dir = 123 のような TOML は channel_map に入り、後続の run_claude(..., cwd=123) で TypeError になります。この TypeError は run_claude の OSError 捕捉対象外なので、既存の bot reply / webhook 502 経路に乗らずタスク例外になります。設定根幹は fail-fast とする設計なので、型不一致もロード時に落とすべきです。
+    suggestion: |
+      channel_id は int 型、dir は非空 str 型であることを _parse_toml_channel_map() で検証し、違反時は ValueError にしてください。対応するテストも追加してください。
+    file: "claude_watch/bot.py"
+    line: 89

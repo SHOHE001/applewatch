@@ -1,0 +1,34 @@
+verdict: fail
+blocking: 1
+persona: contrarian
+summary: |
+  設計は概ね Issue の方向に沿っているが、debug mode が `_build_argv` の検証を完全に迂回するため、重要な異常系テストが実装と矛盾します。加えて bot の config fallback は暗黙挙動が強く、より単純で事故りにくい設計にできる余地があります。
+findings:
+  - severity: high
+    title: "debug mode が mode/session_id 検証を迂回し、異常系テストと実挙動が食い違う"
+    detail: |
+      after スニペットでは `CLAUDE_WATCH_DEBUG=1` のとき `_build_argv(prompt, mode, session_id)` より前に return しているため、`mode='resume'` かつ `session_id=None` や `mode='bogus'` でも `ValueError` が上がらず成功応答になります。テスト計画 T04/T05 は `ValueError` を期待しているため、debug 環境でテストを走らせると仕様が壊れます。これは単なる文書不足ではなく、検証ロジックの位置による具体的なバグです。
+    suggestion: |
+      `run_claude` の先頭で必ず `_build_argv` を呼んで mode/session_id を検証し、その後に debug return する。debug 応答に argv/mode/cwd を含めたいなら、構築済み argv を利用する。
+    file: "claude_watch/claude_runner.py"
+  - severity: medium
+    title: "env fallback の cwd=現在ディレクトリは暗黙的すぎて対立案を検討すべき"
+    detail: |
+      `DISCORD_CHANNEL_ID` だけがある場合に `DISCORD_CHANNEL_DIR` 未指定なら現在の cwd を project_dir にする設計は、systemd/cron/docker などの起動ディレクトリ差で継続先が変わります。contrarian には、これは後方互換というより「設定ミスを正常設定として扱う」設計に見えます。
+    suggestion: |
+      より単純に、TOML が無い場合は `DISCORD_CHANNEL_ID` と `DISCORD_CHANNEL_DIR` の両方があるときだけ map を作り、dir 未指定なら起動時に warning して空 map にする案を比較対象にしてください。既存互換を優先するなら、README とテストで cwd fallback のリスクと期待値を明示する。
+    file: "claude_watch/bot.py"
+  - severity: medium
+    title: "TOML 設定の異常系がテスト計画にない"
+    detail: |
+      channel_map は bot のルーティング根幹ですが、TOML 内の重複 channel_id、dir 欠落、channel_id の型違い、projects が配列でない場合の期待値がありません。実装が permissive になると、片方の設定が silently overwrite されるなど、チャンネルとプロジェクトの対応を誤る可能性があります。
+    suggestion: |
+      少なくとも重複 channel_id と必須フィールド欠落のテストを追加し、起動時に明示的に失敗させるか warning で無視するかを決めてください。
+    file: "claude_watch/bot.py"
+  - severity: low
+    title: "T06 の期待値が弱く、debug mode の新仕様を固定できない"
+    detail: |
+      設計方針では debug mode の応答に mode / cwd を含めるとしていますが、T06 の期待値は stdout に prompt が含まれることだけです。これだと新しく追加する検証容易化の仕様がテストで守られません。
+    suggestion: |
+      T06 は `mode=continue` と `cwd=/x` が debug stdout に含まれることまで期待値に入れる。
+    file: "tests/test_claude_runner.py"
