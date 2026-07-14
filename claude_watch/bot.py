@@ -12,6 +12,21 @@ logger = logging.getLogger(__name__)
 CHUNK_SIZE = 1900
 
 
+def _require_absolute_cwd(cwd: str, *, source: str) -> None:
+    """cwd (dir 別名含む) が絶対パスであることを検証する (FIX-5)。
+
+    ADR-002 の JSONL 特定 (`project_dir_for_cwd` / pane cwd 比較) は起動時の
+    絶対 cwd 文字列に依存するため、相対パスは projects hash 不一致・pane cwd
+    不一致で機能しない。silent に壊れるより actionable な ValueError を送出する。
+    """
+    if not os.path.isabs(cwd):
+        raise ValueError(
+            f"cwd は絶対パスで指定してください (got={cwd!r})。"
+            "ADR-002 の JSONL 特定は起動時の絶対 cwd に依存します "
+            f"({source})"
+        )
+
+
 def _split_message(text: str, limit: int = CHUNK_SIZE) -> list[str]:
     if len(text) <= limit:
         return [text]
@@ -121,6 +136,7 @@ def _parse_toml_channel_map(path: str) -> dict[int, SessionTarget]:
             raise ValueError(
                 f"invalid cwd/dir in {path}: must be a non-empty string, got {cwd!r}"
             )
+        _require_absolute_cwd(cwd, source=f"[[projects]] channel_id={channel_id!r} in {path}")
         if not isinstance(tmux_target, str) or not tmux_target.strip():
             raise ValueError(
                 f"invalid [[projects]] entry in {path}: tmux_target が必須です "
@@ -166,6 +182,8 @@ def load_channel_map() -> dict[int, SessionTarget]:
                 "DISCORD_CHANNEL_DIR 未設定、プロセスの作業ディレクトリで継続 (%s)",
                 cwd_env,
             )
+        else:
+            _require_absolute_cwd(cwd_env, source="DISCORD_CHANNEL_DIR")
         return {
             int(channel_id_raw): SessionTarget(tmux_target=tmux_target_env, cwd=cwd_env)
         }

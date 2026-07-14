@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -94,14 +95,34 @@ def latest_session_jsonl(cwd: str) -> Path | None:
     """`cwd` の projects dir 内で mtime が最新の `*.jsonl` を返す。
 
     dir が存在しない、または jsonl が 1 件も無ければ `None`（例外は送出しない）。
+
+    glob 後に候補が削除される・権限が変わるといった競合が起きても、当該候補を
+    除外して残りから再選択する（全滅すれば `None`）。dir へのアクセスや glob 走査
+    自体が `OSError` を送出するケース（削除・権限エラー等）も `None` にフォールバック
+    する — docstring の「例外は送出しない」を実際に満たす。
     """
     project_dir = project_dir_for_cwd(cwd)
-    if not project_dir.is_dir():
+    try:
+        if not project_dir.is_dir():
+            return None
+        candidates = list(project_dir.glob("*.jsonl"))
+    except OSError:
         return None
-    candidates = [p for p in project_dir.glob("*.jsonl") if p.is_file()]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+    best_path: Path | None = None
+    best_mtime = float("-inf")
+    for p in candidates:
+        try:
+            if not p.is_file():
+                continue
+            mtime = p.stat().st_mtime
+        except OSError:
+            # 削除・権限変更など、glob 後に発生した競合。当該候補を除外して続行。
+            continue
+        if best_path is None or mtime > best_mtime:
+            best_path = p
+            best_mtime = mtime
+    return best_path
 
 
 # ---------------------------------------------------------------------------
@@ -260,14 +281,51 @@ async def wait_for_reply(
 # ---------------------------------------------------------------------------
 
 
-def _default_reply_timeout() -> float:
-    return float(
-        os.environ.get("CLAUDE_WATCH_REPLY_TIMEOUT_SEC", str(DEFAULT_REPLY_TIMEOUT_SEC))
-    )
+def _resolve_reply_timeout(timeout: float | None) -> float:
+    """`timeout`（None 以外）または `CLAUDE_WATCH_REPLY_TIMEOUT_SEC`（既定
+    `DEFAULT_REPLY_TIMEOUT_SEC`）を float 化し、正の有限数であることを検証する。
+
+    `SessionDriver.__init__` から eager に呼ばれる — 不正値は `drive()` の内部
+    (send_prompt 後) ではなく construction 時点で `ValueError` として顕在化させ、
+    silent failure / 無限待機 / 即 timeout を防ぐ。
+    """
+    if timeout is not None:
+        raw: object = timeout
+        source = "timeout 引数"
+    else:
+        raw = os.environ.get(
+            "CLAUDE_WATCH_REPLY_TIMEOUT_SEC", str(DEFAULT_REPLY_TIMEOUT_SEC)
+        )
+        source = "CLAUDE_WATCH_REPLY_TIMEOUT_SEC"
+
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as e:
+        raise ValueError(
+            f"{source} は正の有限数である必要があります (got={raw!r})"
+        ) from e
+
+    if not (math.isfinite(value) and value > 0):
+        raise ValueError(
+            f"{source} は正の有限数である必要があります (got={raw!r})"
+        )
+    return value
 
 
-def _normalize_cwd(value: str) -> str:
-    return os.path.normpath(value)
+def _resolve_cwd_for_comparison(value: str) -> str:
+    """pane cwd 比較専用: symlink を解決した絶対パス文字列を返す。
+
+    `os.path.realpath` で symlink・`.`/`..` を解決する。realpath が失敗する
+    (通常は起こらないが、念のため防御) 場合は `os.path.normpath` にフォールバック
+    する。**注意**: これは比較専用のヘルパーであり、`project_dir_for_cwd` の
+    hash 生成には使わないこと — projects dir 名は Claude 起動時の cwd 文字列
+    そのものに対する literal sanitize に依存するため、realpath を適用すると
+    実 projects dir 名とズレる。
+    """
+    try:
+        return os.path.realpath(value)
+    except OSError:
+        return os.path.normpath(value)
 
 
 class SessionDriver:
@@ -280,9 +338,21 @@ class SessionDriver:
         poll_interval: float = DEFAULT_POLL_INTERVAL_SEC,
         runner: TmuxRunner = _default_tmux_runner,
     ) -> None:
-        self._timeout = timeout
+        # eager 解決・検証: 不正な timeout/env は construction 時点で ValueError にする
+        # (build_client() は起動時に SessionDriver() を作るため、ここで fail-fast する)。
+        self._timeout = _resolve_reply_timeout(timeout)
         self._poll_interval = poll_interval
         self._runner = runner
+        # tmux_target 単位の直列化用ロック（lazy 生成）。同一 target への並行 drive の
+        # offset 取得→send_prompt→wait_for_reply を直列化し、別 target とは独立に動く。
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _lock_for(self, tmux_target: str) -> asyncio.Lock:
+        lock = self._locks.get(tmux_target)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[tmux_target] = lock
+        return lock
 
     async def drive(self, *, tmux_target: str, cwd: str, prompt: str) -> DriveResult:
         jsonl_path = latest_session_jsonl(cwd)
@@ -297,7 +367,9 @@ class SessionDriver:
             )
 
         pane_cwd = await tmux_pane_cwd(tmux_target, runner=self._runner)
-        if pane_cwd is not None and _normalize_cwd(pane_cwd) != _normalize_cwd(cwd):
+        if pane_cwd is not None and _resolve_cwd_for_comparison(
+            pane_cwd
+        ) != _resolve_cwd_for_comparison(cwd):
             return DriveResult(
                 False,
                 "",
@@ -307,25 +379,29 @@ class SessionDriver:
         # pane_cwd が None (取得不可) の場合は検証不能として通す。
         # pane の存在は tmux_target_exists で確認済み。
 
-        try:
-            start_offset = jsonl_path.stat().st_size
-        except OSError:
-            start_offset = 0
+        # offset 取得 → send_prompt → wait_for_reply は同一 tmux_target 内で直列化する
+        # (並行 on_message が同じ start_offset を取得して send-keys が交錯する事故を防ぐ)。
+        async with self._lock_for(tmux_target):
+            try:
+                start_offset = jsonl_path.stat().st_size
+            except OSError:
+                start_offset = 0
 
-        try:
-            await send_prompt(tmux_target, prompt, runner=self._runner)
-        except SessionIOError as e:
-            return DriveResult(False, "", f"送信に失敗しました: {e}")
+            try:
+                await send_prompt(tmux_target, prompt, runner=self._runner)
+            except SessionIOError as e:
+                return DriveResult(False, "", f"送信に失敗しました: {e}")
 
-        timeout = self._timeout if self._timeout is not None else _default_reply_timeout()
-        try:
-            text = await wait_for_reply(
-                jsonl_path,
-                start_offset,
-                timeout=timeout,
-                poll_interval=self._poll_interval,
-            )
-        except TimeoutError:
-            return DriveResult(False, "", f"応答がタイムアウトしました ({timeout:.0f}s)")
+            try:
+                text = await wait_for_reply(
+                    jsonl_path,
+                    start_offset,
+                    timeout=self._timeout,
+                    poll_interval=self._poll_interval,
+                )
+            except TimeoutError:
+                return DriveResult(
+                    False, "", f"応答がタイムアウトしました ({self._timeout:.0f}s)"
+                )
 
         return DriveResult(True, text, "")

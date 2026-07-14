@@ -3,15 +3,17 @@
 各テストの期待値は plan.md「テスト計画」の T-ID に対応する
 (features/11-p2-1-send-keys-jsonl-tail/plan.md)。
 """
+import asyncio
 import json
 import os
+from pathlib import Path
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from claude_watch import session_io
-from claude_watch.bot import ClaudeWatchClient, load_channel_map
+from claude_watch.bot import ClaudeWatchClient, build_client, load_channel_map
 from claude_watch.session_io import (
     DriveResult,
     SessionDriver,
@@ -68,6 +70,77 @@ def test_t04_boundary_latest_session_jsonl_none(tmp_path, monkeypatch):
     empty_dir.mkdir()
     monkeypatch.setattr(session_io, "project_dir_for_cwd", lambda cwd: empty_dir)
     assert latest_session_jsonl("x") is None
+
+
+def test_fix2_boundary_latest_session_jsonl_stat_race_excludes_candidate(
+    tmp_path, monkeypatch
+):
+    """FIX-2: glob 後に 1 件の stat が失敗 (削除競合) しても例外を出さず、
+    残りの候補から最新を返す。"""
+    monkeypatch.setattr(session_io, "project_dir_for_cwd", lambda cwd: tmp_path)
+    a = tmp_path / "a.jsonl"
+    b = tmp_path / "b.jsonl"
+    a.write_text("{}\n", encoding="utf-8")
+    b.write_text("{}\n", encoding="utf-8")
+
+    # is_file() を無条件 True にして、mtime 選定時の stat() 呼び出しでのみ
+    # a.jsonl が「削除競合」で失敗する状況をピンポイントに再現する。
+    monkeypatch.setattr(Path, "is_file", lambda self: True)
+
+    original_stat = Path.stat
+
+    def flaky_stat(self, *args, **kwargs):
+        if self.name == "a.jsonl":
+            raise FileNotFoundError("simulated deletion race")
+        return original_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", flaky_stat)
+
+    assert latest_session_jsonl("irrelevant") == b
+
+
+def test_fix2_boundary_latest_session_jsonl_all_candidates_gone_returns_none(
+    tmp_path, monkeypatch
+):
+    """FIX-2: 候補が全滅 (全件 stat 失敗) すれば None を返す。"""
+    monkeypatch.setattr(session_io, "project_dir_for_cwd", lambda cwd: tmp_path)
+    a = tmp_path / "a.jsonl"
+    a.write_text("{}\n", encoding="utf-8")
+
+    def always_fail_stat(self, *args, **kwargs):
+        raise FileNotFoundError("gone")
+
+    monkeypatch.setattr(Path, "stat", always_fail_stat)
+
+    assert latest_session_jsonl("irrelevant") is None
+
+
+def test_fix2_boundary_latest_session_jsonl_dir_access_oserror_returns_none(
+    tmp_path, monkeypatch
+):
+    """FIX-2: projects dir へのアクセス自体が OSError (権限エラー等) でも None。"""
+    monkeypatch.setattr(session_io, "project_dir_for_cwd", lambda cwd: tmp_path)
+
+    def raise_permission(self):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(Path, "is_dir", raise_permission)
+
+    assert latest_session_jsonl("irrelevant") is None
+
+
+def test_fix2_boundary_latest_session_jsonl_glob_oserror_returns_none(
+    tmp_path, monkeypatch
+):
+    """FIX-2: glob 走査自体が OSError (権限エラー等) でも None。"""
+    monkeypatch.setattr(session_io, "project_dir_for_cwd", lambda cwd: tmp_path)
+
+    def raise_permission(self, pattern):
+        raise PermissionError("permission denied during scan")
+
+    monkeypatch.setattr(Path, "glob", raise_permission)
+
+    assert latest_session_jsonl("irrelevant") is None
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +297,60 @@ async def test_t10_boundary_wait_for_reply_ignores_stale(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# FIX-1: reply timeout の eager 解決・検証 (SessionDriver.__init__)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_value", ["abc", "0", "-1", "nan", "inf"])
+def test_fix1_boundary_session_driver_invalid_timeout_env(bad_value, monkeypatch):
+    """FIX-1: CLAUDE_WATCH_REPLY_TIMEOUT_SEC が abc/0/-1/nan/inf のいずれかなら
+    SessionDriver() の construction 自体が ValueError になる
+    (send_prompt に到達し得ないことは construction 失敗自体で保証される)。"""
+    monkeypatch.setenv("CLAUDE_WATCH_REPLY_TIMEOUT_SEC", bad_value)
+    with pytest.raises(ValueError):
+        SessionDriver()
+
+
+def test_fix1_session_driver_valid_timeout_env(monkeypatch):
+    """FIX-1: 正常な env 値は従来通り construction できる。"""
+    monkeypatch.setenv("CLAUDE_WATCH_REPLY_TIMEOUT_SEC", "42")
+    driver = SessionDriver()
+    assert driver._timeout == 42.0
+
+
+def test_fix1_session_driver_default_timeout(monkeypatch):
+    """FIX-1: env 未設定なら既定値 (DEFAULT_REPLY_TIMEOUT_SEC) が eager に解決される。"""
+    monkeypatch.delenv("CLAUDE_WATCH_REPLY_TIMEOUT_SEC", raising=False)
+    driver = SessionDriver()
+    assert driver._timeout == float(session_io.DEFAULT_REPLY_TIMEOUT_SEC)
+
+
+def test_fix1_session_driver_valid_timeout_arg():
+    """FIX-1: timeout 引数を明示指定した場合も eager 検証される (正常値は通る)。"""
+    driver = SessionDriver(timeout=5.0)
+    assert driver._timeout == 5.0
+
+
+@pytest.mark.parametrize("bad_value", [0.0, -1.0, float("nan"), float("inf")])
+def test_fix1_boundary_session_driver_invalid_timeout_arg(bad_value):
+    """FIX-1: timeout 引数に不正値 (0/負数/nan/inf) を渡しても construction が ValueError。"""
+    with pytest.raises(ValueError):
+        SessionDriver(timeout=bad_value)
+
+
+def test_fix1_build_client_fail_fast_on_bad_timeout_env(tmp_path, monkeypatch):
+    """FIX-1: build_client() は起動時に SessionDriver() を構築するため、
+    不正な CLAUDE_WATCH_REPLY_TIMEOUT_SEC は起動時に fail-fast する
+    (build_client の startup fail-fast を壊さないことの回帰)。"""
+    monkeypatch.setenv("CLAUDE_WATCH_CONFIG", str(tmp_path / "does-not-exist.toml"))
+    monkeypatch.delenv("DISCORD_CHANNEL_ID", raising=False)
+    monkeypatch.setenv("CLAUDE_WATCH_REPLY_TIMEOUT_SEC", "not-a-number")
+
+    with pytest.raises(ValueError):
+        build_client()
+
+
+# ---------------------------------------------------------------------------
 # session_io: SessionDriver.drive
 # ---------------------------------------------------------------------------
 
@@ -327,6 +454,148 @@ async def test_t15_boundary_drive_cwd_mismatch(tmp_path, monkeypatch):
     assert result.text == ""
     assert "不一致" in result.error
     send_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# FIX-3: 同一 tmux_target への並行 drive の直列化
+# ---------------------------------------------------------------------------
+
+
+async def test_fix3_drive_same_target_serializes(tmp_path, monkeypatch):
+    """FIX-3: 同一 target への 2 つの drive を並行起動すると、2 本目の send_prompt は
+    1 本目の (offset 取得→send_prompt→wait_for_reply) 完了まで呼ばれない
+    (asyncio.Lock による直列化)。"""
+    jsonl_path = tmp_path / "sess.jsonl"
+    jsonl_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(session_io, "latest_session_jsonl", lambda cwd: jsonl_path)
+    monkeypatch.setattr(session_io, "tmux_target_exists", AsyncMock(return_value=True))
+    monkeypatch.setattr(session_io, "tmux_pane_cwd", AsyncMock(return_value="/proj/a"))
+
+    events: list[str] = []
+    release = asyncio.Event()
+
+    async def fake_send_prompt(target, text, *, runner=None):
+        events.append(f"send:{text}")
+        if text == "first":
+            await release.wait()
+
+    async def fake_wait_for_reply(jsonl_path, offset, *, timeout, poll_interval):
+        events.append("wait")
+        return "ok"
+
+    monkeypatch.setattr(session_io, "send_prompt", fake_send_prompt)
+    monkeypatch.setattr(session_io, "wait_for_reply", fake_wait_for_reply)
+
+    driver = SessionDriver()
+
+    task1 = asyncio.create_task(
+        driver.drive(tmux_target="main:0.0", cwd="/proj/a", prompt="first")
+    )
+    task2 = asyncio.create_task(
+        driver.drive(tmux_target="main:0.0", cwd="/proj/a", prompt="second")
+    )
+
+    # 両タスクに進行の機会を与える。ロックにより「second」の send_prompt はまだ
+    # 呼ばれていないはず (1 本目が release を待って停止中のため)。
+    await asyncio.sleep(0.05)
+    assert events == ["send:first"]
+
+    release.set()
+    await asyncio.gather(task1, task2)
+
+    assert events == ["send:first", "wait", "send:second", "wait"]
+
+
+async def test_fix3_drive_different_targets_run_concurrently(tmp_path, monkeypatch):
+    """FIX-3: 別 target への drive はロックが別なので並行に進む
+    (直列化は同一 target 内のみ)。"""
+    jsonl_path = tmp_path / "sess.jsonl"
+    jsonl_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(session_io, "latest_session_jsonl", lambda cwd: jsonl_path)
+    monkeypatch.setattr(session_io, "tmux_target_exists", AsyncMock(return_value=True))
+    monkeypatch.setattr(session_io, "tmux_pane_cwd", AsyncMock(return_value="/proj/a"))
+
+    events: list[str] = []
+    release = asyncio.Event()
+
+    async def fake_send_prompt(target, text, *, runner=None):
+        events.append(f"send:{target}")
+        if target == "main:0.0":
+            await release.wait()
+
+    async def fake_wait_for_reply(jsonl_path, offset, *, timeout, poll_interval):
+        return "ok"
+
+    monkeypatch.setattr(session_io, "send_prompt", fake_send_prompt)
+    monkeypatch.setattr(session_io, "wait_for_reply", fake_wait_for_reply)
+
+    driver = SessionDriver()
+
+    task1 = asyncio.create_task(
+        driver.drive(tmux_target="main:0.0", cwd="/proj/a", prompt="p1")
+    )
+    task2 = asyncio.create_task(
+        driver.drive(tmux_target="other:0.0", cwd="/proj/a", prompt="p2")
+    )
+
+    # main:0.0 は release まで停止中でも、独立ロックの other:0.0 はブロックされず完了する。
+    result2 = await asyncio.wait_for(task2, timeout=1.0)
+    assert result2.ok is True
+    assert events == ["send:main:0.0", "send:other:0.0"]
+
+    release.set()
+    await task1
+
+
+# ---------------------------------------------------------------------------
+# FIX-4: pane cwd 比較の symlink / realpath 頑健化
+# ---------------------------------------------------------------------------
+
+
+async def test_fix4_drive_cwd_symlink_matches(tmp_path, monkeypatch):
+    """FIX-4: config が symlink パス・pane が実体パス (同一ディレクトリ) なら
+    realpath 比較で一致扱いになり send_prompt が呼ばれる。"""
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    symlink_dir = tmp_path / "link"
+    symlink_dir.symlink_to(real_dir)
+
+    jsonl_path = tmp_path / "sess.jsonl"
+    jsonl_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(session_io, "latest_session_jsonl", lambda cwd: jsonl_path)
+    monkeypatch.setattr(session_io, "tmux_target_exists", AsyncMock(return_value=True))
+    # tmux は実体パス (symlink 解決後) を返す仕様
+    monkeypatch.setattr(session_io, "tmux_pane_cwd", AsyncMock(return_value=str(real_dir)))
+
+    send_calls = []
+
+    async def fake_send_prompt(target, text, *, runner=None):
+        send_calls.append((target, text))
+
+    monkeypatch.setattr(session_io, "send_prompt", fake_send_prompt)
+    monkeypatch.setattr(session_io, "wait_for_reply", AsyncMock(return_value="ok"))
+
+    driver = SessionDriver()
+    # config 側は symlink パスを cwd として指定する
+    result = await driver.drive(tmux_target="main:0.0", cwd=str(symlink_dir), prompt="hi")
+
+    assert result.ok is True
+    assert send_calls == [("main:0.0", "hi")]
+
+
+def test_fix4_project_dir_for_cwd_not_realpath(tmp_path):
+    """FIX-4 の注意事項の回帰: project_dir_for_cwd は cwd 文字列をそのまま literal
+    sanitize する (realpath を適用しない)。symlink パスと実体パスは異なる
+    projects dir 名になることを固定する (hash 生成への realpath 混入防止)。"""
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    symlink_dir = tmp_path / "link"
+    symlink_dir.symlink_to(real_dir)
+
+    assert project_dir_for_cwd(str(symlink_dir)) != project_dir_for_cwd(str(real_dir))
 
 
 # ---------------------------------------------------------------------------
@@ -573,3 +842,58 @@ cwd = "/toml/dir"
 
     result = load_channel_map()
     assert result == {111: SessionTarget(tmux_target="main:0.0", cwd="/toml/dir")}
+
+
+# ---------------------------------------------------------------------------
+# FIX-5: cwd (dir 別名含む) は絶対パス必須
+# ---------------------------------------------------------------------------
+
+
+def test_fix5_boundary_load_map_relative_dir_toml(tmp_path, monkeypatch):
+    """FIX-5: [[projects]] の dir (cwd 別名) が相対パス → ValueError。"""
+    toml_path = tmp_path / "claude-watch.toml"
+    toml_path.write_text(
+        """
+[[projects]]
+channel_id = 111
+tmux_target = "main:0.0"
+dir = "relative/path"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CLAUDE_WATCH_CONFIG", str(toml_path))
+
+    with pytest.raises(ValueError) as exc_info:
+        load_channel_map()
+    assert "絶対パス" in str(exc_info.value)
+
+
+def test_fix5_boundary_load_map_relative_cwd_toml(tmp_path, monkeypatch):
+    """FIX-5: [[projects]] の cwd が相対パス → ValueError。"""
+    toml_path = tmp_path / "claude-watch.toml"
+    toml_path.write_text(
+        """
+[[projects]]
+channel_id = 111
+tmux_target = "main:0.0"
+cwd = "relative/path"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CLAUDE_WATCH_CONFIG", str(toml_path))
+
+    with pytest.raises(ValueError) as exc_info:
+        load_channel_map()
+    assert "絶対パス" in str(exc_info.value)
+
+
+def test_fix5_boundary_env_relative_dir(tmp_path, monkeypatch):
+    """FIX-5: env fallback の DISCORD_CHANNEL_DIR が相対パス → ValueError。"""
+    monkeypatch.setenv("CLAUDE_WATCH_CONFIG", str(tmp_path / "does-not-exist.toml"))
+    monkeypatch.setenv("DISCORD_CHANNEL_ID", "999888777")
+    monkeypatch.setenv("DISCORD_TMUX_TARGET", "main:0.0")
+    monkeypatch.setenv("DISCORD_CHANNEL_DIR", "relative/path")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_channel_map()
+    assert "絶対パス" in str(exc_info.value)
