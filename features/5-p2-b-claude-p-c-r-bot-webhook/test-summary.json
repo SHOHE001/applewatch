@@ -1,0 +1,9 @@
+{
+  "framework": "pytest",
+  "command": "python -m pytest tests/ -q",
+  "passed": 40,
+  "failed": 0,
+  "skipped": 0,
+  "exit_code": 0,
+  "note": "P2-b の新テスト 19 件を含む全 40 件 pass。skip 0。argv 組み立て / channel_map / webhook session_id をカバー。"
+}

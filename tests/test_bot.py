@@ -18,11 +18,11 @@ def _make_message(*, content: str, channel_id: int, is_bot: bool = False) -> Mag
     return msg
 
 
-def _make_client(runner) -> ClaudeWatchClient:
+def _make_client(runner, channel_map: dict[int, str] | None = None) -> ClaudeWatchClient:
     # discord.Client.__init__ は gateway/HTTP session を初期化するため、
     # テストでは __new__ で bypass し、ハンドラで参照する属性だけ手で設定する。
     client = ClaudeWatchClient.__new__(ClaudeWatchClient)
-    client._target_channel_id = TARGET_CHANNEL
+    client._channel_map = channel_map if channel_map is not None else {TARGET_CHANNEL: "/some/dir"}
     client._runner = runner
     return client
 
@@ -57,7 +57,7 @@ async def test_ignores_empty_messages():
 
 @pytest.mark.asyncio
 async def test_replies_with_claude_answer():
-    async def runner(prompt):
+    async def runner(prompt, **kwargs):
         return (0, f"answer: {prompt}", "")
 
     client = _make_client(runner)
@@ -70,7 +70,7 @@ async def test_replies_with_claude_answer():
 
 @pytest.mark.asyncio
 async def test_replies_with_error_on_failure():
-    async def runner(prompt):
+    async def runner(prompt, **kwargs):
         return (1, "", "boom")
 
     client = _make_client(runner)
@@ -84,7 +84,7 @@ async def test_replies_with_error_on_failure():
 
 @pytest.mark.asyncio
 async def test_replies_with_empty_response_placeholder():
-    async def runner(prompt):
+    async def runner(prompt, **kwargs):
         return (0, "   ", "")
 
     client = _make_client(runner)
@@ -98,7 +98,7 @@ async def test_replies_with_empty_response_placeholder():
 async def test_splits_long_replies():
     long_text = "x" * 5000
 
-    async def runner(prompt):
+    async def runner(prompt, **kwargs):
         return (0, long_text, "")
 
     client = _make_client(runner)

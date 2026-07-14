@@ -1,0 +1,22 @@
+# claude-watch.toml
+#
+# channel_id (Discord チャンネル ID) → dir (プロジェクトの作業ディレクトリ) の対応表。
+# bot はこの表に載っているチャンネルにのみ反応し、着弾チャンネルの dir を cwd にして
+# `claude -p -c <prompt>` (セッション継続) を実行する。表に無いチャンネルは silent ignore。
+#
+# 使い方:
+#   cp claude-watch.toml.example claude-watch.toml
+#   各 channel_id / dir を書き換える（Discord クライアントで開発者モードを ON にし、
+#   チャンネルを右クリック → 「ID をコピー」で channel_id を取得）
+#   .env の CLAUDE_WATCH_CONFIG でこのファイルへのパスを指定する（デフォルトは
+#   カレントディレクトリの claude-watch.toml）。
+#
+# 注意: channel_id の重複や dir 欠落はロード時にエラーになる (fail-fast)。
+
+[[projects]]
+channel_id = 111111111111111111
+dir = "/home/shohei/プロジェクト/applewatch"
+
+[[projects]]
+channel_id = 222222222222222222
+dir = "/home/shohei/プロジェクト/foo"
