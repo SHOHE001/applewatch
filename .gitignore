@@ -17,3 +17,6 @@ __pycache__/
 .env.local
 features/.loop/
 features/.batch/
+
+# machine-local config (channel↔session 紐付け。machine 固有なので commit しない)
+claude-watch.toml
