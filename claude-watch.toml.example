@@ -1,22 +1,36 @@
 # claude-watch.toml
 #
-# channel_id (Discord チャンネル ID) → dir (プロジェクトの作業ディレクトリ) の対応表。
-# bot はこの表に載っているチャンネルにのみ反応し、着弾チャンネルの dir を cwd にして
-# `claude -p -c <prompt>` (セッション継続) を実行する。表に無いチャンネルは silent ignore。
+# channel_id (Discord チャンネル ID) → { tmux_target, cwd } の対応表。
+#
+# Phase 2 (ADR-002: docs/adr/phase2-interactive-session-control.md) から、bot は
+# 「対話モードで人間が事前に tmux に立てた claude セッション」に割り込む方式に変わった:
+#   1. 着弾メッセージを対応する tmux pane (`tmux_target`) へ `tmux send-keys -l` で
+#      入力し Enter を送る（入力）。
+#   2. `cwd` から特定したセッション JSONL (`~/.claude/projects/<hash>/*.jsonl`) を tail し、
+#      ターン完了 (`stop_reason == "end_turn"`) を検知して応答を Discord へ返す（出力）。
+#
+# tmux_target は `session:window.pane` 形式（例: `tmux list-panes -a` で確認できる）。
+# cwd はそのセッションが動いている作業ディレクトリ（JSONL パス特定用、対象 pane の
+# カレントディレクトリと一致している必要がある）。表に無いチャンネルは silent ignore。
 #
 # 使い方:
 #   cp claude-watch.toml.example claude-watch.toml
-#   各 channel_id / dir を書き換える（Discord クライアントで開発者モードを ON にし、
-#   チャンネルを右クリック → 「ID をコピー」で channel_id を取得）
+#   各 channel_id / tmux_target / cwd を書き換える（Discord クライアントで開発者モードを
+#   ON にし、チャンネルを右クリック → 「ID をコピー」で channel_id を取得。tmux_target は
+#   対象セッションの pane で `tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}'`
+#   を実行すると取得できる）
 #   .env の CLAUDE_WATCH_CONFIG でこのファイルへのパスを指定する（デフォルトは
 #   カレントディレクトリの claude-watch.toml）。
 #
-# 注意: channel_id の重複や dir 欠落はロード時にエラーになる (fail-fast)。
+# 注意: channel_id の重複、cwd（または後方互換の dir）欠落、tmux_target 欠落は
+# ロード時にエラーになる (fail-fast)。
 
 [[projects]]
 channel_id = 111111111111111111
-dir = "/home/shohei/プロジェクト/applewatch"
+tmux_target = "main:0.0"
+cwd = "/home/shohei/プロジェクト/applewatch"
 
 [[projects]]
 channel_id = 222222222222222222
-dir = "/home/shohei/プロジェクト/foo"
+tmux_target = "main:0.1"
+cwd = "/home/shohei/プロジェクト/foo"

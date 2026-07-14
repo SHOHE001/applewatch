@@ -1,11 +1,10 @@
 import logging
 import os
 import tomllib
-from typing import Awaitable, Callable
 
 import discord
 
-from .claude_runner import run_claude
+from .session_io import SessionDriver, SessionTarget
 
 
 logger = logging.getLogger(__name__)
@@ -24,21 +23,18 @@ def _split_message(text: str, limit: int = CHUNK_SIZE) -> list[str]:
     return chunks
 
 
-Runner = Callable[..., Awaitable[tuple[int, str, str]]]
-
-
 class ClaudeWatchClient(discord.Client):
     def __init__(
         self,
         *,
-        channel_map: dict[int, str],
-        runner: Runner | None = None,
+        channel_map: dict[int, SessionTarget],
+        driver: SessionDriver | None = None,
     ) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(intents=intents)
         self._channel_map = channel_map
-        self._runner: Runner = runner or run_claude
+        self._driver: SessionDriver = driver or SessionDriver()
 
     async def on_ready(self) -> None:
         logger.info(
@@ -51,25 +47,26 @@ class ClaudeWatchClient(discord.Client):
         if message.author.bot:
             return
         cid = message.channel.id
-        project_dir = self._channel_map.get(cid)
-        if project_dir is None:
+        target = self._channel_map.get(cid)
+        if target is None:
             logger.debug("ignoring message from unmapped channel %s", cid)
             return
         prompt = (message.content or "").strip()
         if not prompt:
             return
-        await self._respond(message, prompt, project_dir)
+        await self._respond(message, prompt, target)
 
-    async def _respond(self, message: discord.Message, prompt: str, project_dir: str) -> None:
+    async def _respond(
+        self, message: discord.Message, prompt: str, target: SessionTarget
+    ) -> None:
         logger.info("claude prompt: %s", prompt[:200])
-        rc, stdout, stderr = await self._runner(prompt, mode="continue", cwd=project_dir)
-        if rc != 0:
-            body = (stderr.strip() or "(no stderr)")[:1500]
-            await message.reply(
-                f"claude が失敗しました (rc={rc}):\n```\n{body}\n```"
-            )
+        ok, text, error = await self._driver.drive(
+            tmux_target=target.tmux_target, cwd=target.cwd, prompt=prompt
+        )
+        if not ok:
+            await message.reply(f"⚠️ {error}")
             return
-        answer = stdout.strip() or "(空のレスポンス)"
+        answer = text.strip() or "(空のレスポンス)"
         chunks = _split_message(answer)
         first = True
         for chunk in chunks:
@@ -80,7 +77,7 @@ class ClaudeWatchClient(discord.Client):
                 await message.channel.send(chunk)
 
 
-def _parse_toml_channel_map(path: str) -> dict[int, str]:
+def _parse_toml_channel_map(path: str) -> dict[int, SessionTarget]:
     with open(path, "rb") as f:
         data = tomllib.load(f)
 
@@ -92,18 +89,23 @@ def _parse_toml_channel_map(path: str) -> dict[int, str]:
     if not projects:
         raise ValueError(f"no [[projects]] entries in {path}")
 
-    channel_map: dict[int, str] = {}
+    channel_map: dict[int, SessionTarget] = {}
     for entry in projects:
         if not isinstance(entry, dict):
             raise ValueError(
                 f"invalid [[projects]] entry in {path}: expected a table, got {entry!r}"
             )
         channel_id = entry.get("channel_id")
-        project_dir = entry.get("dir")
-        if channel_id is None or project_dir is None:
+        tmux_target = entry.get("tmux_target")
+        cwd = entry.get("cwd")
+        if cwd is None:
+            # 後方互換: `dir` は `cwd` の別名として `cwd` 欠落時のみ受理する。
+            cwd = entry.get("dir")
+
+        if channel_id is None or cwd is None:
             raise ValueError(
                 f"invalid [[projects]] entry in {path}: "
-                f"channel_id and dir are both required, got {entry!r}"
+                f"channel_id and cwd (or dir) are both required, got {entry!r}"
             )
         if isinstance(channel_id, bool):
             raise ValueError(
@@ -115,27 +117,34 @@ def _parse_toml_channel_map(path: str) -> dict[int, str]:
             raise ValueError(
                 f"invalid channel_id in {path}: must be an integer, got {entry.get('channel_id')!r}"
             ) from exc
-        if not isinstance(project_dir, str) or not project_dir.strip():
+        if not isinstance(cwd, str) or not cwd.strip():
             raise ValueError(
-                f"invalid dir in {path}: must be a non-empty string, got {project_dir!r}"
+                f"invalid cwd/dir in {path}: must be a non-empty string, got {cwd!r}"
+            )
+        if not isinstance(tmux_target, str) or not tmux_target.strip():
+            raise ValueError(
+                f"invalid [[projects]] entry in {path}: tmux_target が必須です "
+                "(ADR-002 の send-keys 方式ではセッション操作に対象 tmux pane の特定が"
+                "必須なため)。各 [[projects]] に tmux_target = \"session:window.pane\" を"
+                f"追加してください。例: tmux_target = \"main:0.0\"。got {entry!r}"
             )
         if channel_id in channel_map:
-            raise ValueError(
-                f"duplicate channel_id {channel_id} in {path}"
-            )
-        channel_map[channel_id] = project_dir
+            raise ValueError(f"duplicate channel_id {channel_id} in {path}")
+        channel_map[channel_id] = SessionTarget(tmux_target=tmux_target, cwd=cwd)
     return channel_map
 
 
-def load_channel_map() -> dict[int, str]:
-    """Load the channel_id -> project_dir map (Discord-independent, pure).
+def load_channel_map() -> dict[int, SessionTarget]:
+    """Load the channel_id -> SessionTarget map (Discord-independent, pure).
 
     Priority:
     1. `CLAUDE_WATCH_CONFIG` (default "claude-watch.toml") if the file exists:
-       parsed as TOML with a `[[projects]]` array of {channel_id, dir}.
-    2. Else, `DISCORD_CHANNEL_ID` (back-compat single-entry map). `dir` comes
-       from `DISCORD_CHANNEL_DIR`, falling back to the current working
-       directory with a warning.
+       parsed as TOML with a `[[projects]]` array of {channel_id, tmux_target, cwd}
+       (`dir` accepted as a back-compat alias for `cwd` when `cwd` is absent).
+    2. Else, `DISCORD_CHANNEL_ID` (back-compat single-entry map). `tmux_target`
+       comes from `DISCORD_TMUX_TARGET` (required — ADR-002 の send-keys 方式では
+       対象 tmux pane の指定が必須), `cwd` comes from `DISCORD_CHANNEL_DIR`,
+       falling back to the current working directory with a warning.
     3. Else, an empty map (bot reacts to nothing).
     """
     config_path = os.environ.get("CLAUDE_WATCH_CONFIG", "claude-watch.toml")
@@ -144,18 +153,26 @@ def load_channel_map() -> dict[int, str]:
 
     channel_id_raw = os.environ.get("DISCORD_CHANNEL_ID")
     if channel_id_raw:
-        project_dir = os.environ.get("DISCORD_CHANNEL_DIR")
-        if not project_dir:
-            project_dir = os.getcwd()
+        tmux_target_env = os.environ.get("DISCORD_TMUX_TARGET")
+        if not tmux_target_env:
+            raise ValueError(
+                "DISCORD_TMUX_TARGET が未設定です。ADR-002 の send-keys 方式では"
+                "対象 tmux pane の指定が必須です。例: DISCORD_TMUX_TARGET=main:0.0"
+            )
+        cwd_env = os.environ.get("DISCORD_CHANNEL_DIR")
+        if not cwd_env:
+            cwd_env = os.getcwd()
             logger.warning(
                 "DISCORD_CHANNEL_DIR 未設定、プロセスの作業ディレクトリで継続 (%s)",
-                project_dir,
+                cwd_env,
             )
-        return {int(channel_id_raw): project_dir}
+        return {
+            int(channel_id_raw): SessionTarget(tmux_target=tmux_target_env, cwd=cwd_env)
+        }
 
     return {}
 
 
 def build_client() -> ClaudeWatchClient:
     channel_map = load_channel_map()
-    return ClaudeWatchClient(channel_map=channel_map)
+    return ClaudeWatchClient(channel_map=channel_map, driver=SessionDriver())
