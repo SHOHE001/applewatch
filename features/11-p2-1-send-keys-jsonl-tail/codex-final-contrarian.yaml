@@ -1,0 +1,38 @@
+verdict: fail
+blocking: 2
+persona: contrarian
+summary: |
+  中核フローは簡潔ですが、設定値異常が入力送信後に例外化する点と、JSONL の切り替えを追従できない点が graceful handling を破ります。CI は正常系と固定ファイルの tail に偏っており、この2つの障害モードを検出できません。
+findings:
+  - severity: high
+    title: "タイムアウト設定の解析失敗が prompt 送信後に未処理例外となる"
+    detail: |
+      `CLAUDE_WATCH_REPLY_TIMEOUT_SEC` は `send_prompt` の完了後に `_default_reply_timeout()` で `float` 化されます。空文字や `abc` などが設定されていると、prompt は既に tmux pane へ送信済みなのに `ValueError` が `drive` から漏れ、Discord へのエラー返信も行われません。仕様上の graceful handling に反し、利用者には無反応なのに Claude 側では処理が走る不整合になります。NaN、負数、0、無限大も拒否されず、即時 timeout や永久待機相当の挙動を起こせます。
+    suggestion: |
+      タイムアウトは `SessionDriver` 構築時または起動設定ロード時に有限な正数として検証し、無効値は prompt 送信前に actionable な `ValueError` で fail-fast してください。防御的に `drive` 内でも設定解析失敗を `DriveResult(False, ..., error)` に変換し、境界値テストを追加してください。
+    file: "claude_watch/session_io.py"
+    line: 311
+  - severity: high
+    title: "選択した JSONL が切り替わると実際の応答を永久に見失う"
+    detail: |
+      `latest_session_jsonl(cwd)` の結果を送信前に一度だけ固定し、`wait_for_reply` はその Path だけを監視します。Claude 側がセッション再開・compact・ファイル切り替え等で同じ cwd の新しい JSONL に応答を書き始めた場合、旧ファイルのサイズだけを poll して必ず timeout します。ファイル消失も `stat` エラーを単に旧 offset 扱いするため復旧しません。これは Non-Goal の「同一 cwd の複数同時セッション識別」とは別で、対象セッション自身の出力ファイル切り替えに対するリソース追従の問題です。
+    suggestion: |
+      送信後の監視中に対象 Path の消失・inode 変更・cwd 配下でより新しい JSONL の出現を検知し、安全な条件下で offset 0 から追従してください。対応しない設計なら、少なくともファイル消失を即座に明示エラーにし、実機で JSONL がターン間に固定される前提を検証・文書化してください。ローテーション/削除のテストも追加してください。
+    file: "claude_watch/session_io.py"
+    line: 222
+  - severity: medium
+    title: "cwd 比較が字句正規化だけで正しい同一ディレクトリを拒否する"
+    detail: |
+      `os.path.normpath` はシンボリックリンク、相対パス、`~`、大文字小文字や mount alias を解決しません。README 自身が日本語パスへのシンボリックリンク運用を案内しているため、config が symlink 側で pane が実体側を返す構成では誤って不一致となり送信不能です。
+    suggestion: |
+      存在するパスは `Path(...).expanduser().resolve()` または `os.path.realpath` で比較し、解決不能時のみ字句正規化へフォールバックしてください。symlink と相対パスのテストを追加してください。
+    file: "claude_watch/session_io.py"
+    line: 280
+  - severity: medium
+    title: "JSONL 探索中のファイル競合が bot ハンドラを例外終了させる"
+    detail: |
+      候補列挙後、`max(..., key=lambda p: p.stat().st_mtime)` の途中でファイルが削除・権限変更されると `OSError` が漏れます。docstring の「例外は送出しない」という期待や silent drop しない方針に反し、Discord 返信なしで終了します。
+    suggestion: |
+      各候補の `stat` 失敗を除外し、全候補が消えた場合は `None` を返してください。`glob`/directory access 自体の `OSError` も同様に扱い、競合削除テストを追加してください。
+    file: "claude_watch/session_io.py"
+    line: 101

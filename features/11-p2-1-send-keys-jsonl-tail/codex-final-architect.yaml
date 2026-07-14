@@ -1,0 +1,38 @@
+verdict: fail
+blocking: 2
+persona: architect
+summary: |
+  中核フローは plan に沿っていますが、同一 pane への並行メッセージを直列化しておらず、応答の誤帰属が発生します。またタイムアウト設定を送信後に遅延評価しているため、不正値で silent failure や無限待機になります。
+findings:
+  - severity: high
+    title: "同一 tmux pane への drive が並行実行され、応答を誤帰属する"
+    detail: |
+      Discord の on_message は複数メッセージを並行処理し得ますが、SessionDriver に target 単位の lock/queue がありません。近接した2件が同じ start_offset を取得して prompt を連続送信すると、両方の wait_for_reply が最初の end_turn を読み、同じ応答を別メッセージへ返す可能性があります。これは Non-Goal の「人間との競合」とは別で、bot 自身の通常入力だけで再現する共有状態の race です。
+    suggestion: |
+      tmux_target 単位の asyncio.Lock またはキューを SessionDriver に持たせ、offset取得・send_prompt・end_turn待機を一つのクリティカルセクションとして直列化してください。2件を同時に drive するテストも追加してください。
+    file: "claude_watch/session_io.py"
+    line: 270
+  - severity: high
+    title: "タイムアウト設定の不正値が prompt 送信後のクラッシュまたは無限待機を起こす"
+    detail: |
+      CLAUDE_WATCH_REPLY_TIMEOUT_SEC は drive 内で send_prompt の後に float 変換されます。空でない非数値なら prompt は pane に送信済みなのに ValueError が bot まで伝播してエラー返信されません。また NaN は deadline 比較が常に falseとなり永久に pollし、inf も実質無限待機、0以下は送信直後にタイムアウトします。graceful handling とリソース管理の要件を破ります。
+    suggestion: |
+      SessionDriver 構築時に有限かつ正の値として検証し、不正なら起動時に actionable な ValueError で fail-fastしてください。少なくとも送信前に評価し、nan/inf/0/負数のテストを追加してください。
+    file: "claude_watch/session_io.py"
+    line: 257
+  - severity: medium
+    title: "start_offset が不完全行の途中の場合、その行を復元できない"
+    detail: |
+      wait_for_reply の carry は start_offset 以降に読んだ断片だけを保持します。offset取得時点でJSONL末尾が改行未達なら、後から追記された後半だけをJSONとして解析して破棄するため、その行が end_turn ならタイムアウトします。「不完全な末尾行をバッファする」という設計を開始境界では満たしていません。
+    suggestion: |
+      開始時に offset 直前まで遡って最終改行位置を求めるか、送信前に末尾が改行で終わることを確認して安全な開始位置を保存してください。開始時点ですでに不完全行があるテストを追加してください。
+    file: "claude_watch/session_io.py"
+    line: 194
+  - severity: medium
+    title: "JSONL探索中のファイル競合が未処理でbotハンドラを落とす"
+    detail: |
+      latest_session_jsonl は候補列挙後の max キーで各 p.stat() を無保護に呼びます。Claude側のローテーションや削除と競合すると FileNotFoundError/OSError が送出され、DriveResultによるエラー返信を経由せず on_message が失敗します。
+    suggestion: |
+      stat失敗した候補を除外して再選択し、全候補が消えた場合はNoneを返してください。列挙直後に候補が削除されるテストを追加してください。
+    file: "claude_watch/session_io.py"
+    line: 101

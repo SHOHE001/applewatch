@@ -1,0 +1,46 @@
+verdict: fail
+blocking: 1
+persona: migration
+summary: |
+  移行観点では、旧 `dir` 設定を fail-fast にする判断が既存設定からの起動不能を明示的に発生させるため blocking です。その他は概ね移行対象を列挙できていますが、戻り値型と既存 runner 互換の説明に不整合があり、テストで固定すべきです。
+findings:
+  - severity: high
+    title: "旧 `dir` のみ設定を即 ValueError にするため既存環境が起動不能になる"
+    detail: |
+      plan は `load_channel_map()` で旧 `dir` のみのエントリを `ValueError` にすると明記している。これは Phase 1/P1 系の既存 `claude-watch.toml` または env fallback 利用者に対して、設定ファイルを更新しない限り bot 起動そのものを壊す後方互換破壊。migration persona としては、fail-fast は移行戦略として成立する場合もあるが、この plan には旧設定を検出した際の移行メッセージ、サンプル変換、互換期間、または既存 webhook `/ask` 利用者への影響分離が不足している。Issue 決定事項なら medium に落とすべきだが、この文書内では既存 public config schema を破壊する実装仕様として提示されており、実装すると具体的に既存設定で起動失敗する。
+    suggestion: |
+      少なくとも `dir` のみ検出時のエラーに `tmux_target` 追加例を含め、README に旧設定から新設定への migration snippet を追加する。可能なら 1 release は `DISCORD_TMUX_TARGET` 未設定時に明示的な setup error を返す CLI/起動前チェックに寄せ、既存 webhook 経路と bot 経路の失敗範囲を分離する。
+    file: "plan.md"
+    line: 54
+  - severity: medium
+    title: "`DriveResult = tuple[bool, str, str]` を Runner と同型と呼んでいるが既存 `(rc, stdout, stderr)` と意味互換ではない"
+    detail: |
+      既存 Runner は `rc: int` を返し、bot 側は `rc != 0` を失敗判定に使っていた。一方、新しい `DriveResult` の第1要素は `bool ok` であり、Python では `False == 0` / `True == 1` になるため、既存テストや呼び出し元が誤って旧 runner 判定を残すと成功/失敗が反転または誤解される危険がある。plan は bot を書き換えるとしているが、「同型」という説明は migration 上の互換性を過大に見せている。
+    suggestion: |
+      `DriveResult` を `NamedTuple` または dataclass にし、`ok/text/error` を名前付きで扱う。少なくとも plan から「Runner と同型」を削除し、旧 runner 互換ではなく bot 内部 API の置換であると明記する。
+    file: "plan.md"
+    line: 43
+  - severity: medium
+    title: "env fallback の旧変数から新変数への移行ケースがテスト計画にない"
+    detail: |
+      plan は env fallback に `DISCORD_CHANNEL_ID` + `DISCORD_TMUX_TARGET` + `DISCORD_CHANNEL_DIR` を要求するとしているが、テスト計画は TOML の旧 `dir` 欠落/alias は扱う一方、env の `DISCORD_TMUX_TARGET` 欠落、`DISCORD_CHANNEL_DIR` の cwd 採用、型不正、TOML と env の優先順位を明示していない。既存利用者が `.env` ベースなら、この移行経路が壊れてもテストで検出できない。
+    suggestion: |
+      `load_channel_map` の env fallback テストを追加する。例: `DISCORD_CHANNEL_ID + DISCORD_CHANNEL_DIR` のみは `ValueError`、`DISCORD_CHANNEL_ID + DISCORD_TMUX_TARGET + DISCORD_CHANNEL_DIR` は `SessionTarget`、TOML 存在時は既存仕様どおり TOML 優先、を期待値として固定する。
+    file: "plan.md"
+    line: 55
+  - severity: medium
+    title: "旧 bot テストの置換範囲が ID ベースで曖昧で、既存 public behavior の保持確認が不足している"
+    detail: |
+      `test_bot.py の runner 系` を新 driver ベースに書き換えるとあるが、既存のメンション除去、未 map チャンネル無視、bot 発言無視、空文字無視、チャンク分割などの public behavior がどのテストで継続保証されるかが一部しか対応していない。特に runner 失敗時のエラー整形から driver 失敗時の reply への変更は仕様変更なので、旧 stderr truncation などを削除してよい根拠と期待値を明確にしないと regression と仕様変更の境界が曖昧になる。
+    suggestion: |
+      既存 `test_bot.py` の各ケースを migration map として列挙し、保持する挙動・置換する挙動・削除する挙動を分ける。driver 失敗時の error reply は 1500 文字制限やコードブロック有無を新仕様としてテストに固定する。
+    file: "plan.md"
+    line: 73
+  - severity: low
+    title: "テスト ID が T19 を欠番にしており既存 ID との対応が追いにくい"
+    detail: |
+      テスト計画が T18 から T20 に飛んでいる。機能上の問題ではないが、既存テスト ID を更新する移行作業ではレビューや traceability が落ちる。
+    suggestion: |
+      欠番に理由がなければ T19 を使うか、既存 T19 を意図的に残すなら「T19 は既存ケースを更新」などと明記する。
+    file: "plan.md"
+    line: 109

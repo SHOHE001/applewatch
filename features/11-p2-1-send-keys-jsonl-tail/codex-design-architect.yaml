@@ -1,0 +1,38 @@
+verdict: fail
+blocking: 1
+persona: architect
+summary: |
+  全体方針は ADR-002 に沿っていますが、出力側の JSONL tail と入力側の tmux target が設計上結び付いておらず、別セッションの応答を拾う経路が残っています。critical はありませんが、このデータフロー不整合は実装前に詰めるべきです。
+findings:
+  - severity: high
+    title: "tmux_target と cwd/JSONL の対応が検証されず、別セッションの応答を Discord に返し得る"
+    detail: |
+      設計は `channel_id -> {tmux_target, cwd}` とし、入力は `tmux_target` に送る一方、出力は `cwd` から `latest_session_jsonl` を選びます。この2つが同一 Claude セッションを指す保証・検証がありません。設定ミス、pane の cwd 変更、同じ tmux session 内で別ディレクトリを開いた場合に、pane A へ送った入力に対して cwd B の最新 JSONL を tail し、無関係な応答を Discord に返すか timeout します。これは既存 `channel_map` の単一 `project_dir` ルーティングよりデータフローの整合性が弱く、入力経路と出力経路が分離されたままです。
+    suggestion: |
+      `tmux display-message` などで pane の current_path を取得し、設定 `cwd` と一致することを `drive` の送信前に検証してください。少なくとも mismatch は fail-fast し、tail 対象 JSONL の決定根拠を `tmux_target` と結び付ける設計にしてください。
+    file: "plan.md"
+    line: 49
+  - severity: medium
+    title: "DriveResult を Runner と同型と説明しているが、意味論は互換ではない"
+    detail: |
+      `DriveResult = tuple[bool, str, str]` を既存 `Runner` の `(rc, stdout, stderr)` と同型として差分最小化するとありますが、先頭要素は `rc:int` から `ok:bool` に変わっています。tuple 長だけが同じで意味論が逆転しており、既存の runner 風ヘルパーやテスト fake が流用された場合に読み違えやすい設計です。
+    suggestion: |
+      `DriveResult` は `NamedTuple` または dataclass にして `ok/text/error` を名前で扱う設計にしてください。既存 Runner と似せる説明は削除し、bot 側の adapter 境界を明確にしてください。
+    file: "plan.md"
+    line: 53
+  - severity: medium
+    title: "wait_for_reply が中間 assistant text を最終返信へ混入させる可能性がある"
+    detail: |
+      `start_offset` 以降に出た assistant の `text` ブロックを順に連結して返す設計です。一方で PoC では中間ターンが `tool_use` とされており、Claude の assistant メッセージが `text` と `tool_use` を同時に含む場合、中間説明文まで最終 Discord 返信に混ざります。ターン完了検知を `end_turn` に寄せる設計と、収集範囲を全 assistant text にする設計が衝突しています。
+    suggestion: |
+      `stop_reason == "end_turn"` の assistant メッセージに含まれる `text` のみ返すのか、同一 user turn 内の全 assistant text を返すのかを明確化し、T08 に「tool_use 前の text を含める/含めない」の期待値を追加してください。
+    file: "plan.md"
+    line: 52
+  - severity: medium
+    title: "bot.py の before/after は発火部のみで、設定境界の before/after が不足している"
+    detail: |
+      レビュー観点の既存関数編集では before/after スニペットが求められていますが、`load_channel_map` / `_parse_toml_channel_map` / `build_client` は名前だけで、旧 `dict[int, str]` から `dict[int, SessionTarget]` へ変える境界の具体コードがありません。特に env fallback と TOML schema の責務分担が見えず、既存 `channel_map` の型前提と衝突する箇所を事前に特定しにくいです。
+    suggestion: |
+      `load_channel_map` と `build_client` についても最小 before/after スニペットを追加し、`SessionTarget` 生成、`dir` alias、`DISCORD_TMUX_TARGET` 必須化の分岐を明示してください。
+    file: "plan.md"
+    line: 72
