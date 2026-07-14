@@ -1,0 +1,41 @@
+verdict: pass
+blocking: 0
+persona: contrarian
+summary: |
+  critical/high に相当する成立不能な欠陥は見つかりません。ただし、設計は最小構成としては妥当な一方で、運用時の取り違え・過剰な型寄せ・移行時の粗さが残っており、実装前に詰める価値があります。
+findings:
+  - severity: medium
+    title: "DriveResult を Runner 互換タプルに寄せる設計がかえって曖昧"
+    detail: |
+      `DriveResult = tuple[bool, str, str]` は既存 Runner の `(rc, stdout, stderr)` と形だけ似せていますが、`ok` と `rc` は意味が異なり、`text` と `error` の排他性も型で表現されません。差分を小さくする目的は理解できますが、新しい session driver の public contract としては、失敗種別や target/jsonl/timeout の区別を後から扱いにくくします。
+    suggestion: |
+      `DriveResult` は `dataclass` または `NamedTuple` にして `ok`, `text`, `error`, `kind` などの名前付きフィールドを持たせる。bot 側差分の小ささより、driver 境界の意味明確化を優先する理由がないか再確認してください。
+    file: "plan.md"
+  - severity: medium
+    title: "latest mtime JSONL 戦略は最小だが誤セッション接続を検出できない"
+    detail: |
+      Non-Goal として同一 cwd 多重起動を除外していますが、`latest_session_jsonl(cwd)` は stale な別セッションや直近に触られた無関係 JSONL を選んでも検出不能です。tmux pane の実 cwd や session id と JSONL の対応を確認しないため、単一 cwd 前提でも、古い pane と新しい JSONL の組み合わせで別会話へ返信するリスクがあります。
+    suggestion: |
+      P2-1 では厳密識別しないとしても、送信前に選択した JSONL path をログへ出す、mtime が古すぎる場合はエラーにする、または `SessionDriver.drive` の結果に選択 JSONL を含めてテスト可能にする程度の軽いガードを検討してください。
+    file: "plan.md"
+  - severity: medium
+    title: "wait_for_reply が中間 assistant text まで連結する仕様は返信の重複を招きうる"
+    detail: |
+      設計では `start_offset` 以降に出た assistant の `text` ブロックを順に連結するとしています。tool use 前の assistant message に短い text が含まれ、その後 end_turn の最終回答にも同じ趣旨が含まれる場合、Discord 返信が冗長または途中思考に近い内容を含む可能性があります。PoC では `thinking` 除外は確認されていますが、中間 `text` の扱いは別問題です。
+    suggestion: |
+      より単純に、`stop_reason == "end_turn"` の assistant message 内の `text` ブロックだけを返す案を第一候補にしてください。中間 text も必要なら、その理由と期待フォーマットをテスト T08 に明示してください。
+    file: "plan.md"
+  - severity: medium
+    title: "旧 dir-only 設定の fail-fast は運用移行として強い"
+    detail: |
+      `tmux_target` 必須化により、既存の `dir` のみ設定は起動時 `ValueError` になります。P2 の発火方式変更としては筋が通っていますが、contrarian 観点では bot 全体を止めるより、該当 channel だけ無効化して設定エラーを Discord/log に出す方が単純に運用影響を抑えられます。
+    suggestion: |
+      fail-fast を維持するなら README にアップグレード手順を明記してください。代替として、旧エントリは map から除外して明示ログを出す方式を検討してください。
+    file: "plan.md"
+  - severity: low
+    title: "T19 が欠番"
+    detail: |
+      テスト ID が T18 から T20 に飛んでいます。実害は小さいですが、既存テスト番号との対応を追うときに混乱します。
+    suggestion: |
+      意図的な欠番でなければ T20 以降を詰めるか、T19 を予約済みとして注記してください。
+    file: "plan.md"

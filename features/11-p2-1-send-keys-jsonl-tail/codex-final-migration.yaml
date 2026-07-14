@@ -1,0 +1,22 @@
+verdict: fail
+blocking: 2
+persona: migration
+summary: |
+  旧設定の相対 `dir` が実質的に互換でなく、タイムアウト環境変数の不正値は送信後の応答放棄を引き起こします。テストはすべて成功していますが、どちらの移行・設定失敗経路もカバーされていません。
+findings:
+  - severity: high
+    title: "後方互換を謳う `dir` エイリアスで相対パスが破壊される"
+    detail: |
+      従来の `dir="relative/path"` は subprocess の `cwd` として有効でしたが、新実装は文字列を絶対化せず、そのまま Claude projects ディレクトリ名へ変換します。さらに pane が返す絶対パスと `normpath` だけで比較するため、既存の相対 `dir` は JSONL 未検出または cwd 不一致になります。README は「tmux_target を追加するだけ」と案内しており、実際の移行要件と食い違います。新テストも絶対パスしか検証していません。
+    suggestion: |
+      設定ロード時に `cwd`/`dir` を設定ファイルの基準ディレクトリまたは従来と同じプロセス cwd に対して絶対化し、必要なら `realpath` も用いて pane cwd と比較してください。相対 `dir` の移行テストも追加してください。
+    file: "claude_watch/session_io.py"
+    line: 112
+  - severity: high
+    title: "不正な reply timeout がプロンプト送信後に例外または無限待機を起こす"
+    detail: |
+      `CLAUDE_WATCH_REPLY_TIMEOUT_SEC` は `send_prompt` の後で初めて `float()` 変換されます。`abc` などでは ValueError が `drive` から漏れ、既に pane へ入力したプロンプトへの返信が Discord に返りません。`nan` や `inf` も受理され、deadline 比較により永久待機し得ます。これは graceful handling と silent drop しない要件に反します。
+    suggestion: |
+      起動時に環境変数を解析し、有限かつ正の値であることを検証して fail-fast してください。少なくとも送信前に検証し、設定不正を DriveResult のエラーとして返すテストを追加してください。
+    file: "claude_watch/session_io.py"
+    line: 245

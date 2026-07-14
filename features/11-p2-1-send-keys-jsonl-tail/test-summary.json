@@ -1,0 +1,18 @@
+{
+  "summary": {
+    "framework": "pytest",
+    "command": "source .venv/bin/activate && python -m pytest -q",
+    "result": "76 passed, 0 failed, 0 skipped",
+    "total": 76,
+    "passed": 76,
+    "failed": 0,
+    "skipped": 0,
+    "new_test_file": "tests/test_p2_1_session.py (T01-T26 + T06b)",
+    "coverage_note": "plan.md 全 T-ID を 1:1 でカバー。retain: run_claude/webhook/_split_message。replace: 旧 -p 前提 bot テストを driver ベースへ。",
+    "manual_check_required": true,
+    "manual_items": "完了条件（人間）: gen8 tmux 実対話 claude への Discord 割り込み応答 / Apple Watch 経由操作の実機確認",
+    "divergence_check": "divergences:0。missing:15 は checker が async def を非認識な既知の false positive（全テストは実在し pass）",
+    "review_fixes": "STEP7 最終レビュー採用の FIX-1〜5（timeout検証/stat競合/並行直列化/symlink cwd/絶対cwd必須）+ 回帰24テスト"
+  },
+  "failure_excerpts": []
+}
