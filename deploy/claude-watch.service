@@ -10,6 +10,8 @@ Group=shohei
 # 日本語パスに注意。systemd は UTF-8 を解釈するが、% などのエスケープは予約されているので避ける。
 WorkingDirectory=/home/shohei/プロジェクト/applewatch
 EnvironmentFile=/home/shohei/プロジェクト/applewatch/.env
+# CLAUDE_CMD=claude は ~/.local/bin にある。systemd の既定 PATH には含まれないので明示する。
+Environment=PATH=/home/shohei/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/home/shohei/プロジェクト/applewatch/.venv/bin/python -m claude_watch.server
 Restart=on-failure
 RestartSec=10
@@ -21,9 +23,10 @@ SyslogIdentifier=claude-watch
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=read-only
-# WorkingDirectory が /home/shohei なので ProtectHome=read-only にすると ExecStart が読めなくなるケースあり。
-# 動かなければ ProtectHome の行をコメントアウトする。
+# ProtectHome は無効。bot が起動する claude は ~/.claude/projects/ にセッションを書き、
+# WorkingDirectory 配下でコード編集も行うため、home を read-only にすると P2-b の -c/-r や
+# 実作業が壊れる。read-only にしたい場合は ReadWritePaths で ~/.claude と対象プロジェクトを開ける必要がある。
+# ProtectHome=read-only
 
 [Install]
 WantedBy=multi-user.target
