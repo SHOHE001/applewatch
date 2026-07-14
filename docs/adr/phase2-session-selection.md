@@ -1,8 +1,14 @@
 # ADR-001: Phase 2 セッション選択方式
 
-- Status: Accepted
+- Status: Superseded by ADR-002 (2026-07-14)
 - Date: 2026-07-13
 - Related: #4 (parent: #2, blocks: #5)
+
+> **Superseded (2026-07-14)**: 本 ADR は `claude -p -c` によるヘッドレス発火を前提としていたが、
+> Phase 2 の方針が「tmux 上で走る対話モード claude セッションを直接操作する」に転換したため、
+> 発火手段（`-p` → tmux send-keys + JSONL tail）を [ADR-002](./phase2-interactive-session-control.md) で置き換える。
+> ただし本 ADR の中核である「Discord チャンネル ↔ 対象の紐付けでセッションを特定する」という選択方式は
+> ADR-002 に継承される（紐付け先が `project_dir`（-p の cwd）から `tmux target`（send-keys 宛先）に変わるのみ）。
 
 ## Context
 
